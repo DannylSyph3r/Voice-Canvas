@@ -1,6 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 
-export type ConnectionState = 'connected' | 'reconnecting' | 'failed'
+export type ConnectionState = 'connected' | 'reconnecting' | 'failed' | 'disconnected'
 
 export interface TranscriptEvent {
   type: 'transcript'
@@ -75,7 +75,10 @@ export function useWebSocket(
     }
 
     ws.onclose = (event: CloseEvent) => {
-      if (event.wasClean) return
+      if (event.wasClean) {
+        setConnectionState('disconnected')
+        return
+      }
       if (attemptsRef.current >= MAX_ATTEMPTS) {
         setConnectionState('failed')
         return

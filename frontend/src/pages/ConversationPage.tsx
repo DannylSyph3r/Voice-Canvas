@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { startSession } from '../services/api'
 import { getUserId, addSessionId } from '../utils/storage'
 import { useAudioCapture } from '../hooks/useAudioCapture'
 import { useAudioPlayback } from '../hooks/useAudioPlayback'
-import { useWebSocket, type TranscriptEvent } from '../hooks/useWebSocket'
+import { useWebSocket, type TranscriptEvent, type WebSocketHandlers } from '../hooks/useWebSocket'
 
 interface TranscriptLine {
   role: 'user' | 'agent'
@@ -14,6 +14,7 @@ export default function ConversationPage() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<TranscriptLine[]>([])
   const [isCapturing, setIsCapturing] = useState(false)
+  const [sessionEnded, setSessionEnded] = useState(false)
 
   const userId = useMemo(() => getUserId(), [])
   const wsParams = useMemo(
@@ -22,24 +23,37 @@ export default function ConversationPage() {
   )
 
   const { enqueue, stop: stopPlayback } = useAudioPlayback()
+  // This instance of useAudioCapture is only for stopCapture in the
+  // session-complete handler. The capturing instance is created below
+  // with sendAudio wired in.
+  const { stopCapture } = useAudioCapture(() => {})
 
-  const handlers = useRef({
-    onAudioChunk: (buffer: ArrayBuffer) => enqueue(buffer),
-    onTranscript: (event: TranscriptEvent) => {
-      if (event.is_final) {
-        setTranscript((prev) => [...prev, { role: event.role, text: event.text }])
-      }
-    },
-  })
-
-  const { sendAudio, connectionState } = useWebSocket(
-    sessionId,
-    wsParams,
-    handlers.current,
+  // Handlers are stable via useMemo — no useRef needed because useWebSocket
+  // already maintains its own internal handlersRef and syncs it after every render.
+  // Accessing .current during render (the old approach) is what the React
+  // Compiler was correctly flagging.
+  const handlers = useMemo<WebSocketHandlers>(
+    () => ({
+      onAudioChunk: (buffer: ArrayBuffer) => enqueue(buffer),
+      onTranscript: (event: TranscriptEvent) => {
+        if (event.is_final) {
+          setTranscript((prev) => [...prev, { role: event.role, text: event.text }])
+        }
+      },
+      onSessionComplete: () => {
+        console.log('[Session] session_complete received — ending session')
+        stopCapture()
+        stopPlayback()
+        setIsCapturing(false)
+        setSessionEnded(true)
+      },
+    }),
+    [enqueue, stopPlayback, stopCapture],
   )
 
-  const { startCapture, stopCapture, isMuted, toggleMute } =
-    useAudioCapture(sendAudio)
+  const { sendAudio, connectionState } = useWebSocket(sessionId, wsParams, handlers)
+
+  const { startCapture, isMuted, toggleMute } = useAudioCapture(sendAudio)
 
   useEffect(() => {
     startSession('moment', 'watercolor')
@@ -65,10 +79,19 @@ export default function ConversationPage() {
     <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-between p-6">
       <div className="w-full max-w-lg">
         <p className="text-sm text-gray-400 mb-4">
-          Status: <span className="font-mono">{connectionState}</span>
+          Status:{' '}
+          <span className="font-mono">
+            {sessionEnded ? 'session complete' : connectionState}
+          </span>
         </p>
 
-        <div className="flex flex-col gap-2">
+        {sessionEnded && (
+          <div className="mt-4 px-4 py-3 rounded-lg bg-green-800 text-green-200 text-sm text-center">
+            Session complete. Your canvas is ready.
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2 mt-4">
           {transcript.map((line, i) => (
             <div
               key={i}
@@ -85,7 +108,7 @@ export default function ConversationPage() {
       </div>
 
       <div className="flex flex-col items-center gap-3 mt-8">
-        {isCapturing && (
+        {isCapturing && !sessionEnded && (
           <button
             onClick={toggleMute}
             className="text-xs text-gray-400 underline"
@@ -93,14 +116,18 @@ export default function ConversationPage() {
             {isMuted ? 'Unmute' : 'Mute'}
           </button>
         )}
-        <button
-          onClick={handleMicClick}
-          className={`w-16 h-16 rounded-full text-2xl flex items-center justify-center transition-colors ${
-            isCapturing ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500 hover:bg-blue-600'
-          }`}
-        >
-          {isCapturing ? '⏹' : '🎤'}
-        </button>
+        {!sessionEnded && (
+          <button
+            onClick={handleMicClick}
+            className={`w-16 h-16 rounded-full text-2xl flex items-center justify-center transition-colors ${
+              isCapturing
+                ? 'bg-red-500 hover:bg-red-600'
+                : 'bg-gray-600 hover:bg-gray-500'
+            }`}
+          >
+            {isCapturing ? '⏹' : '🎙'}
+          </button>
+        )}
       </div>
     </div>
   )

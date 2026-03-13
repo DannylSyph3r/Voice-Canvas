@@ -55,7 +55,7 @@ class WebSocketHandler:
         live_request_queue = LiveRequestQueue()
 
         run_config = RunConfig(
-            response_modalities=["AUDIO"],
+            response_modalities=[types.Modality.AUDIO],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
         )
@@ -115,6 +115,12 @@ class WebSocketHandler:
                 await self._handle_event(event)
         except Exception as e:
             print(f"[WebSocket] Downstream error: {e}")
+        finally:
+            print("[WebSocket] Downstream loop ended — sending session_complete")
+            try:
+                await self.websocket.send_text(json.dumps({"type": "session_complete"}))
+            except Exception:
+                pass  # websocket may already be closing, that's fine
 
     async def _handle_event(self, event):
         if not event.content or not event.content.parts:
@@ -141,8 +147,23 @@ class WebSocketHandler:
                 except Exception:
                     pass
 
-        # Function calls — ADK executes stubs automatically
-        # Logging here for Phase 2 visibility, dispatcher wired in Phase 3
         function_calls = event.get_function_calls() if hasattr(event, "get_function_calls") else []
         for call in function_calls:
             print(f"[TOOL] {call.name}({call.args})")
+
+            if call.name == "finish_session":
+                print("[WebSocket] finish_session called — notifying frontend")
+                try:
+                    await self.websocket.send_text(json.dumps({"type": "session_complete"}))
+                except Exception:
+                    pass
+
+            elif call.name == "generate_scene_image":
+                # Phase 3 will replace this stub with real image generation.
+                # For now, notify the frontend that image generation is in progress
+                # so the UI can show a placeholder state.
+                print(f"[TOOL] generate_scene_image stub — description: {call.args.get('description', '')}")
+                try:
+                    await self.websocket.send_text(json.dumps({"type": "image_generating"}))
+                except Exception:
+                    pass

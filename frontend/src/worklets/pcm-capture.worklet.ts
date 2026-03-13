@@ -1,5 +1,15 @@
-// Runs in AudioWorklet scope — no imports, no ES modules
-// Captures float32 mic input, converts to int16 PCM, posts to main thread
+declare class AudioWorkletProcessor {
+  readonly port: MessagePort
+  process(
+    inputs: Float32Array[][],
+    outputs: Float32Array[][],
+    parameters: Map<string, Float32Array>,
+  ): boolean
+}
+declare function registerProcessor(
+  name: string,
+  processorCtor: new (...args: unknown[]) => AudioWorkletProcessor,
+): void
 
 class PcmCaptureProcessor extends AudioWorkletProcessor {
   process(inputs: Float32Array[][]): boolean {

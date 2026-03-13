@@ -83,13 +83,15 @@ class WebSocketHandler:
             while True:
                 data = await self.websocket.receive()
                 if data.get("bytes"):
-                    await live_request_queue.send_realtime(
+                    live_request_queue.send_realtime(
                         types.Blob(
                             data=data["bytes"],
                             mime_type="audio/pcm;rate=16000",
                         )
                     )
         except WebSocketDisconnect:
+            pass
+        except RuntimeError:
             pass
         except Exception as e:
             print(f"[WebSocket] Upstream error: {e}")

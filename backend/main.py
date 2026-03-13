@@ -1,10 +1,11 @@
 import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from backend.services import session_service
+from backend.websocket.handler import WebSocketHandler
 
 app = FastAPI(title="VoiceCanvas API")
 
@@ -44,3 +45,22 @@ def get_session(user_id: str, session_id: str):
     if session is None:
         return JSONResponse(status_code=404, content={"error": "Session not found"})
     return session
+
+
+@app.websocket("/ws/{session_id}")
+async def websocket_endpoint(
+    websocket: WebSocket,
+    session_id: str,
+    user_id: str = Query(...),
+    mode: str = Query(...),
+    style: str = Query(...),
+):
+    await websocket.accept()
+    handler = WebSocketHandler(
+        websocket=websocket,
+        session_id=session_id,
+        user_id=user_id,
+        mode=mode,
+        style=style,
+    )
+    await handler.run()

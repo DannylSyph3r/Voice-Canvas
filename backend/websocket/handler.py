@@ -28,7 +28,6 @@ class WebSocketHandler:
         self.style = style
 
     async def run(self):
-        # Verify session exists in GCS — run_in_executor keeps event loop unblocked
         loop = asyncio.get_event_loop()
         session = await loop.run_in_executor(
             None, get_session, self.user_id, self.session_id
@@ -37,8 +36,6 @@ class WebSocketHandler:
             await self.websocket.close(code=4004, reason="Session not found")
             return
 
-        # ADK setup — InMemorySessionService holds conversational state
-        # for the duration of this live connection only
         agent = create_agent(self.mode, self.style)
         session_service = InMemorySessionService()
         runner = Runner(
@@ -54,8 +51,11 @@ class WebSocketHandler:
 
         live_request_queue = LiveRequestQueue()
 
+        # NOTE: RunConfig.response_modalities expects plain strings, not the
+        # types.Modality enum. The Pydantic serialization warning from "AUDIO"
+        # is cosmetic — the string form is what ADK actually requires here.
         run_config = RunConfig(
-            response_modalities=[types.Modality.AUDIO],
+            response_modalities=["AUDIO"],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
         )
@@ -120,21 +120,18 @@ class WebSocketHandler:
             try:
                 await self.websocket.send_text(json.dumps({"type": "session_complete"}))
             except Exception:
-                pass  # websocket may already be closing, that's fine
+                pass
 
     async def _handle_event(self, event):
         if not event.content or not event.content.parts:
             return
 
         for part in event.content.parts:
-            # Audio chunk — forward as binary frame
             if part.inline_data and part.inline_data.mime_type.startswith("audio/"):
                 try:
                     await self.websocket.send_bytes(part.inline_data.data)
                 except Exception:
                     pass
-
-            # Transcription — forward as JSON text frame
             elif part.text:
                 role = "user" if event.author == "user" else "agent"
                 try:
@@ -159,9 +156,6 @@ class WebSocketHandler:
                     pass
 
             elif call.name == "generate_scene_image":
-                # Phase 3 will replace this stub with real image generation.
-                # For now, notify the frontend that image generation is in progress
-                # so the UI can show a placeholder state.
                 print(f"[TOOL] generate_scene_image stub — description: {call.args.get('description', '')}")
                 try:
                     await self.websocket.send_text(json.dumps({"type": "image_generating"}))

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { startSession } from '../services/api'
 import { getUserId, addSessionId } from '../utils/storage'
 import { useAudioCapture } from '../hooks/useAudioCapture'
@@ -23,15 +23,17 @@ export default function ConversationPage() {
   )
 
   const { enqueue, stop: stopPlayback } = useAudioPlayback()
-  // This instance of useAudioCapture is only for stopCapture in the
-  // session-complete handler. The capturing instance is created below
-  // with sendAudio wired in.
-  const { stopCapture } = useAudioCapture(() => {})
 
-  // Handlers are stable via useMemo — no useRef needed because useWebSocket
-  // already maintains its own internal handlersRef and syncs it after every render.
-  // Accessing .current during render (the old approach) is what the React
-  // Compiler was correctly flagging.
+  // sendAudioRef is written in an effect (not during render), so the Compiler
+  // is happy. The stable callback closes over the ref and never changes identity,
+  // which means useAudioCapture never recreates its internal state.
+  const sendAudioRef = useRef<(buf: ArrayBuffer) => void>(() => {})
+  const stableSendAudio = useCallback((buf: ArrayBuffer) => {
+    sendAudioRef.current(buf)
+  }, []) // empty deps — identity is permanent
+
+  const { startCapture, stopCapture, isMuted, toggleMute } = useAudioCapture(stableSendAudio)
+
   const handlers = useMemo<WebSocketHandlers>(
     () => ({
       onAudioChunk: (buffer: ArrayBuffer) => enqueue(buffer),
@@ -53,9 +55,18 @@ export default function ConversationPage() {
 
   const { sendAudio, connectionState } = useWebSocket(sessionId, wsParams, handlers)
 
-  const { startCapture, isMuted, toggleMute } = useAudioCapture(sendAudio)
-
+  // Wire the live sendAudio into the ref after each render — this is an effect,
+  // not render, so the Compiler allows the .current write here.
   useEffect(() => {
+    sendAudioRef.current = sendAudio
+  }, [sendAudio])
+
+  // Guard against React StrictMode double-invocation in dev
+  const sessionStarted = useRef(false)
+  useEffect(() => {
+    if (sessionStarted.current) return
+    sessionStarted.current = true
+
     startSession('moment', 'watercolor')
       .then(({ session_id }) => {
         addSessionId(session_id)

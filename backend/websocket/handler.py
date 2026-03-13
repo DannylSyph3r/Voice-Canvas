@@ -51,11 +51,7 @@ class WebSocketHandler:
 
         live_request_queue = LiveRequestQueue()
 
-        # NOTE: RunConfig.response_modalities expects plain strings, not the
-        # types.Modality enum. The Pydantic serialization warning from "AUDIO"
-        # is cosmetic — the string form is what ADK actually requires here.
         run_config = RunConfig(
-            response_modalities=["AUDIO"],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
         )

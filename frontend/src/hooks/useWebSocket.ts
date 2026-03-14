@@ -9,11 +9,19 @@ export interface TranscriptEvent {
   is_final: boolean
 }
 
+export interface ImageReadyEvent {
+  type: 'image_ready'
+  index: number
+  url: string
+  style: string
+  description: string
+}
+
 export interface WebSocketHandlers {
   onAudioChunk?: (buffer: ArrayBuffer) => void
   onTranscript?: (event: TranscriptEvent) => void
   onImageGenerating?: () => void
-  onImageReady?: (url: string) => void
+  onImageReady?: (event: ImageReadyEvent) => void
   onSessionComplete?: () => void
 }
 
@@ -63,7 +71,7 @@ export function useWebSocket(
             handlersRef.current.onImageGenerating?.()
             break
           case 'image_ready':
-            handlersRef.current.onImageReady?.(msg.url)
+            handlersRef.current.onImageReady?.(msg as ImageReadyEvent)
             break
           case 'session_complete':
             handlersRef.current.onSessionComplete?.()

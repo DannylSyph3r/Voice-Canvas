@@ -3,7 +3,13 @@ import { startSession } from '../services/api'
 import { getUserId, addSessionId } from '../utils/storage'
 import { useAudioCapture } from '../hooks/useAudioCapture'
 import { useAudioPlayback } from '../hooks/useAudioPlayback'
-import { useWebSocket, type TranscriptEvent, type WebSocketHandlers } from '../hooks/useWebSocket'
+import {
+  useWebSocket,
+  type TranscriptEvent,
+  type WebSocketHandlers,
+  type ImageReadyEvent,
+} from '../hooks/useWebSocket'
+import LiveImagePreview from '../components/LiveImagePreview'
 
 interface TranscriptLine {
   role: 'user' | 'agent'
@@ -15,6 +21,9 @@ export default function ConversationPage() {
   const [transcript, setTranscript] = useState<TranscriptLine[]>([])
   const [isCapturing, setIsCapturing] = useState(false)
   const [sessionEnded, setSessionEnded] = useState(false)
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [latestImageUrl, setLatestImageUrl] = useState<string | null>(null)
+  const [imageCount, setImageCount] = useState(0)
 
   const userId = useMemo(() => getUserId(), [])
   const wsParams = useMemo(
@@ -24,13 +33,10 @@ export default function ConversationPage() {
 
   const { enqueue, stop: stopPlayback } = useAudioPlayback()
 
-  // sendAudioRef is written in an effect (not during render), so the Compiler
-  // is happy. The stable callback closes over the ref and never changes identity,
-  // which means useAudioCapture never recreates its internal state.
   const sendAudioRef = useRef<(buf: ArrayBuffer) => void>(() => {})
   const stableSendAudio = useCallback((buf: ArrayBuffer) => {
     sendAudioRef.current(buf)
-  }, []) // empty deps — identity is permanent
+  }, [])
 
   const { startCapture, stopCapture, isMuted, toggleMute } = useAudioCapture(stableSendAudio)
 
@@ -42,12 +48,21 @@ export default function ConversationPage() {
           setTranscript((prev) => [...prev, { role: event.role, text: event.text }])
         }
       },
+      onImageGenerating: () => {
+        setIsGenerating(true)
+      },
+      onImageReady: (event: ImageReadyEvent) => {
+        setLatestImageUrl(event.url)
+        setImageCount(event.index + 1)
+        setIsGenerating(false)
+      },
       onSessionComplete: () => {
-        console.log('[Session] session_complete received — ending session')
+        console.log('[Session] session_complete received')
         stopCapture()
         stopPlayback()
         setIsCapturing(false)
         setSessionEnded(true)
+        setIsGenerating(false)
       },
     }),
     [enqueue, stopPlayback, stopCapture],
@@ -55,13 +70,10 @@ export default function ConversationPage() {
 
   const { sendAudio, connectionState } = useWebSocket(sessionId, wsParams, handlers)
 
-  // Wire the live sendAudio into the ref after each render — this is an effect,
-  // not render, so the Compiler allows the .current write here.
   useEffect(() => {
     sendAudioRef.current = sendAudio
   }, [sendAudio])
 
-  // Guard against React StrictMode double-invocation in dev
   const sessionStarted = useRef(false)
   useEffect(() => {
     if (sessionStarted.current) return
@@ -101,6 +113,12 @@ export default function ConversationPage() {
             Session complete. Your canvas is ready.
           </div>
         )}
+
+        <LiveImagePreview
+          isGenerating={isGenerating}
+          latestImageUrl={latestImageUrl}
+          imageCount={imageCount}
+        />
 
         <div className="flex flex-col gap-2 mt-4">
           {transcript.map((line, i) => (

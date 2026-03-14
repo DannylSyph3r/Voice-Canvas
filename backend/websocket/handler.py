@@ -9,7 +9,8 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from backend.agent.voicecanvas_agent import create_agent
-from backend.services.session_service import get_session
+from backend.services import image_generation as image_generation_service
+from backend.services.session_service import finalise_session, get_session
 
 
 class WebSocketHandler:
@@ -26,6 +27,8 @@ class WebSocketHandler:
         self.user_id = user_id
         self.mode = mode
         self.style = style
+        self.image_index = 0
+        self._transcript_parts: list[str] = []
 
     async def run(self):
         loop = asyncio.get_event_loop()
@@ -56,9 +59,7 @@ class WebSocketHandler:
             output_audio_transcription=types.AudioTranscriptionConfig(),
         )
 
-        upstream_task = asyncio.create_task(
-            self._upstream(live_request_queue)
-        )
+        upstream_task = asyncio.create_task(self._upstream(live_request_queue))
         downstream_task = asyncio.create_task(
             self._downstream(runner, adk_session.id, live_request_queue, run_config)
         )
@@ -130,30 +131,100 @@ class WebSocketHandler:
                     pass
             elif part.text:
                 role = "user" if event.author == "user" else "agent"
+                is_final = not bool(event.partial)
                 try:
-                    await self.websocket.send_text(json.dumps({
-                        "type": "transcript",
-                        "role": role,
-                        "text": part.text,
-                        "is_final": not bool(event.partial),
-                    }))
+                    await self.websocket.send_text(
+                        json.dumps(
+                            {
+                                "type": "transcript",
+                                "role": role,
+                                "text": part.text,
+                                "is_final": is_final,
+                            }
+                        )
+                    )
                 except Exception:
                     pass
+                if is_final:
+                    self._transcript_parts.append(f"{role.capitalize()}: {part.text}")
 
-        function_calls = event.get_function_calls() if hasattr(event, "get_function_calls") else []
+        function_calls = (
+            event.get_function_calls() if hasattr(event, "get_function_calls") else []
+        )
         for call in function_calls:
             print(f"[TOOL] {call.name}({call.args})")
 
-            if call.name == "finish_session":
-                print("[WebSocket] finish_session called — notifying frontend")
+            if call.name == "generate_scene_image":
+                description = call.args.get("description", "")
+                current_index = self.image_index
+
+                if current_index < 8:
+                    self.image_index += 1
+                    try:
+                        await self.websocket.send_text(
+                            json.dumps(
+                                {
+                                    "type": "image_generating",
+                                    "index": current_index,
+                                    "style": self.style,
+                                }
+                            )
+                        )
+                    except Exception:
+                        pass
+                    asyncio.create_task(
+                        self._run_image_generation(description, current_index)
+                    )
+                else:
+                    print(
+                        f"[ImageGen] Soft cap reached — ignoring call at index {current_index}"
+                    )
+
+            elif call.name == "finish_session":
+                print("[WebSocket] finish_session — finalising session")
+                transcript = "\n".join(self._transcript_parts)
                 try:
-                    await self.websocket.send_text(json.dumps({"type": "session_complete"}))
+                    await asyncio.to_thread(
+                        finalise_session, self.user_id, self.session_id, transcript
+                    )
+                except Exception as e:
+                    print(f"[WebSocket] finalise_session error: {e}")
+                try:
+                    await self.websocket.send_text(
+                        json.dumps(
+                            {
+                                "type": "session_complete",
+                                "offer_canvas": True,
+                            }
+                        )
+                    )
                 except Exception:
                     pass
 
-            elif call.name == "generate_scene_image":
-                print(f"[TOOL] generate_scene_image stub — description: {call.args.get('description', '')}")
-                try:
-                    await self.websocket.send_text(json.dumps({"type": "image_generating"}))
-                except Exception:
-                    pass
+    async def _run_image_generation(self, description: str, index: int):
+        print(f"[ImageGen] Generating index {index} — {description[:60]}")
+        url = await image_generation_service.generate_image(
+            scene_description=description,
+            art_style=self.style,
+            user_id=self.user_id,
+            session_id=self.session_id,
+            index=index,
+        )
+        if url is None:
+            print(f"[ImageGen] Generation returned None for index {index}")
+            return
+
+        try:
+            await self.websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "image_ready",
+                        "index": index,
+                        "url": url,
+                        "style": self.style,
+                        "description": description,
+                    }
+                )
+            )
+        except Exception:
+            pass
